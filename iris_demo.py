@@ -7,7 +7,7 @@ FaceLandmarker = mp.tasks.vision.FaceLandmarker
 FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
 VisionRunningMode = mp.tasks.vision.RunningMode
 
-MODEL_PATH = "face_landmarker.task"
+MODEL_PATH = "DATA/face_landmarker.task"
 
 LEFT_IRIS = [468, 469, 470, 471, 472, 473]
 RIGHT_IRIS = [474, 475, 476, 477]

@@ -1,6 +1,8 @@
 import mediapipe as mp
 import cv2
 import numpy as np
+import os
+from datetime import datetime
 from threading import Lock
 
 BaseOptions = mp.tasks.BaseOptions
@@ -8,8 +10,9 @@ FaceLandmarker = mp.tasks.vision.FaceLandmarker
 FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
 VisionRunningMode = mp.tasks.vision.RunningMode
 
-MODEL_PATH = "face_landmarker.task"
+MODEL_PATH = "DATA/face_landmarker.task"
 
+# indeces of relavent landmarks
 LEFT_IRIS = [468, 469, 470, 471, 472]
 RIGHT_IRIS = [473, 474, 475, 476, 477]
 LEFT_IRIS_CENTER = 468
@@ -18,8 +21,9 @@ LEFT_EYE = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 1
 RIGHT_EYE = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
 LEFT_EYE_OUTER = 33
 LEFT_EYE_INNER = 133
-RIGHT_EYE_OUTER = 263
-RIGHT_EYE_INNER = 362
+# Keep right-eye axis direction consistent with left eye for panel visualization.
+RIGHT_EYE_OUTER = 362
+RIGHT_EYE_INNER = 263
 
 
 def pupil_relative_position(landmarks, iris_indices, eye_indices, outer_corner_idx, inner_corner_idx):
@@ -148,10 +152,33 @@ def draw_landmarks(image, landmarks):
         for i in range(len(pts_c)):
             cv2.line(image, pts_c[i], pts_c[(i + 1) % len(pts_c)], color, 1)
 
+    # Draw eye-corner anchors used for normalization debugging.
+    anchor_points = [
+        (LEFT_EYE_OUTER, "L-outer", (0, 255, 255)),
+        (LEFT_EYE_INNER, "L-inner", (0, 200, 255)),
+        (RIGHT_EYE_OUTER, "R-outer", (255, 0, 255)),
+        (RIGHT_EYE_INNER, "R-inner", (255, 100, 255)),
+    ]
+    for idx, label, color in anchor_points:
+        x, y = int(landmarks[idx].x * w), int(landmarks[idx].y * h)
+        cv2.circle(image, (x, y), 5, color, -1)
+        cv2.putText(
+            image,
+            label,
+            (x + 6, y - 6),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
+
 def main():
     latest_result = None
     result_lock = Lock()
     last_timestamp_ms = -1
+    writer = None
+    output_path = None
 
     def on_result(result, output_image, timestamp_ms):
         nonlocal latest_result
@@ -179,6 +206,28 @@ def main():
                 break
 
             frame = cv2.flip(frame, 1)
+
+            if writer is None:
+                os.makedirs("DATA/webcam_results", exist_ok=True)
+                h, w = frame.shape[:2]
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                if fps <= 0 or np.isnan(fps):
+                    fps = 30.0
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_path = os.path.join("DATA/webcam_results", f"webcam_output_{timestamp}.mp4")
+                writer = cv2.VideoWriter(
+                    output_path,
+                    cv2.VideoWriter_fourcc(*"mp4v"),
+                    fps,
+                    (w, h),
+                )
+                if not writer.isOpened():
+                    writer = None
+                    output_path = None
+                    print("Warning: failed to initialize video recording")
+                else:
+                    print(f"Recording webcam output to: {output_path}")
+
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             timestamp_ms = int(cap.get(cv2.CAP_PROP_POS_MSEC))
@@ -196,11 +245,17 @@ def main():
                 draw_landmarks(frame, result.face_landmarks[0])
                 draw_pupil_position_text(frame, result.face_landmarks[0])
 
+            if writer is not None:
+                writer.write(frame)
+
             cv2.imshow("Iris Tracking (ESC to quit)", frame)
             if cv2.waitKey(1) == 27:
                 break
 
     cap.release()
+    if writer is not None:
+        writer.release()
+        print(f"Saved recording: {output_path}")
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
