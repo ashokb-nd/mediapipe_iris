@@ -25,6 +25,9 @@ LEFT_EYE_INNER = 133
 RIGHT_EYE_OUTER = 362
 RIGHT_EYE_INNER = 263
 
+EYE_CROP_SIZE = (120, 68)
+EYE_CROP_PAD = 12
+
 
 def pupil_relative_position(landmarks, iris_indices, eye_indices, outer_corner_idx, inner_corner_idx):
     iris_x = np.mean([landmarks[i].x for i in iris_indices])
@@ -64,10 +67,30 @@ def pupil_relative_position(landmarks, iris_indices, eye_indices, outer_corner_i
     return rel_x, rel_y, iris_x, iris_y
 
 
-def draw_pupil_indicator_panel(image, left_rel, right_rel):
+def extract_eye_crop(image, landmarks, eye_indices, pad=EYE_CROP_PAD, out_size=EYE_CROP_SIZE):
     h, w = image.shape[:2]
-    panel_w = 180
-    panel_h = 140
+    pts = np.array([(int(landmarks[i].x * w), int(landmarks[i].y * h)) for i in eye_indices], dtype=np.int32)
+    if pts.size == 0:
+        return None
+
+    x, y, bw, bh = cv2.boundingRect(pts)
+    x0 = max(0, x - pad)
+    y0 = max(0, y - pad)
+    x1 = min(w, x + bw + pad)
+    y1 = min(h, y + bh + pad)
+    if x1 <= x0 or y1 <= y0:
+        return None
+
+    crop = image[y0:y1, x0:x1]
+    if crop.size == 0:
+        return None
+    return cv2.resize(crop, out_size, interpolation=cv2.INTER_LINEAR)
+
+
+def draw_pupil_indicator_panel(image, left_rel, right_rel, left_crop=None, right_crop=None):
+    h, w = image.shape[:2]
+    panel_w = 290
+    panel_h = 220
     pad = 12
     panel_x = w - panel_w - pad
     panel_y = pad
@@ -78,8 +101,8 @@ def draw_pupil_indicator_panel(image, left_rel, right_rel):
     cv2.putText(image, "Pupil Position", (panel_x + 10, panel_y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
 
     box_size = 52
-    left_box = (panel_x + 18, panel_y + 34)
-    right_box = (panel_x + 98, panel_y + 34)
+    left_box = (panel_x + 54, panel_y + 34)
+    right_box = (panel_x + 184, panel_y + 34)
 
     for label, (bx, by), rel, color in [
         ("L", left_box, left_rel, (0, 255, 0)),
@@ -96,6 +119,23 @@ def draw_pupil_indicator_panel(image, left_rel, right_rel):
             dot_y = max(by, min(by + box_size, dot_y))
             cv2.circle(image, (dot_x, dot_y), 4, color, -1)
 
+    crop_w, crop_h = EYE_CROP_SIZE
+    left_crop_pos = (left_box[0] - 34, left_box[1] + box_size + 24)
+    right_crop_pos = (right_box[0] - 34, right_box[1] + box_size + 24)
+
+    cv2.putText(image, "Eye Crops", (panel_x + 108, panel_y + 104), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
+
+    for label, crop, (cx, cy), color in [
+        ("L", left_crop, left_crop_pos, (0, 255, 0)),
+        ("R", right_crop, right_crop_pos, (0, 0, 255)),
+    ]:
+        cv2.rectangle(image, (cx - 1, cy - 1), (cx + crop_w + 1, cy + crop_h + 1), (190, 190, 190), 1)
+        cv2.putText(image, label, (cx - 12, cy + crop_h // 2 + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+        if crop is not None:
+            image[cy:cy + crop_h, cx:cx + crop_w] = crop
+        else:
+            cv2.rectangle(image, (cx, cy), (cx + crop_w, cy + crop_h), (50, 50, 50), -1)
+
 
 def draw_pupil_position_text(image, landmarks):
     h, w = image.shape[:2]
@@ -105,7 +145,9 @@ def draw_pupil_position_text(image, landmarks):
 
     left_rel = (left[0], left[1]) if left else None
     right_rel = (right[0], right[1]) if right else None
-    draw_pupil_indicator_panel(image, left_rel, right_rel)
+    left_crop = extract_eye_crop(image, landmarks, LEFT_EYE)
+    right_crop = extract_eye_crop(image, landmarks, RIGHT_EYE)
+    draw_pupil_indicator_panel(image, left_rel, right_rel, left_crop, right_crop)
 
     if left:
         lrx, lry, _, _ = left
@@ -154,24 +196,14 @@ def draw_landmarks(image, landmarks):
 
     # Draw eye-corner anchors used for normalization debugging.
     anchor_points = [
-        (LEFT_EYE_OUTER, "L-outer", (0, 255, 255)),
-        (LEFT_EYE_INNER, "L-inner", (0, 200, 255)),
-        (RIGHT_EYE_OUTER, "R-outer", (255, 0, 255)),
-        (RIGHT_EYE_INNER, "R-inner", (255, 100, 255)),
+        (LEFT_EYE_OUTER, (0, 255, 255)),
+        (LEFT_EYE_INNER, (0, 200, 255)),
+        (RIGHT_EYE_OUTER, (255, 0, 255)),
+        (RIGHT_EYE_INNER, (255, 100, 255)),
     ]
-    for idx, label, color in anchor_points:
+    for idx, color in anchor_points:
         x, y = int(landmarks[idx].x * w), int(landmarks[idx].y * h)
         cv2.circle(image, (x, y), 5, color, -1)
-        cv2.putText(
-            image,
-            label,
-            (x + 6, y - 6),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
-            color,
-            1,
-            cv2.LINE_AA,
-        )
 
 def main():
     latest_result = None
