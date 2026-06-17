@@ -2,8 +2,13 @@ import argparse
 
 import cv2
 import mediapipe as mp
+from collections import deque
 
-from iris_module import MODEL_PATH, BaseOptions, FaceLandmarker, FaceLandmarkerOptions, VisionRunningMode, draw_landmarks, draw_pupil_position_text
+from iris_module import (
+    MODEL_PATH, BaseOptions, FaceLandmarker, FaceLandmarkerOptions,
+    VisionRunningMode, draw_landmarks, draw_pupil_position_text,
+    compose_frame, HISTORY_MAX,
+)
 
 
 def parse_args():
@@ -36,11 +41,16 @@ def main():
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
-        fps = 30.   
+        fps = 30.
 
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    writer = create_writer(args.output, fps, frame_width, frame_height) if args.output else None
+
+    total_w = frame_width + 12 + 380 + 12
+    right_h = 12 + 220 + 12 + 130 + 12 + 130 + 12
+    total_h = max(frame_height, right_h)
+
+    writer = create_writer(args.output, fps, total_w, total_h) if args.output else None
 
     options = FaceLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=MODEL_PATH),
@@ -51,6 +61,8 @@ def main():
 
     last_timestamp_ms = -1
     frame_index = 0
+    history_l = deque(maxlen=HISTORY_MAX)
+    history_r = deque(maxlen=HISTORY_MAX)
 
     with FaceLandmarker.create_from_options(options) as landmarker:
         if not args.no_display:
@@ -73,15 +85,27 @@ def main():
 
             result = landmarker.detect_for_video(mp_image, timestamp_ms)
 
+            left_rel = right_rel = None
+            left_crop = right_crop = None
+
             if result and result.face_landmarks:
                 draw_landmarks(frame, result.face_landmarks[0])
-                draw_pupil_position_text(frame, result.face_landmarks[0])
+                left_rel, right_rel, left_crop, right_crop = \
+                    draw_pupil_position_text(frame, result.face_landmarks[0])
+                if left_rel:
+                    history_l.append(left_rel)
+                if right_rel:
+                    history_r.append(right_rel)
+
+            canvas = compose_frame(frame, left_rel, right_rel,
+                                   left_crop, right_crop,
+                                   history_l, history_r)
 
             if writer is not None:
-                writer.write(frame)
+                writer.write(canvas)
 
             if not args.no_display:
-                cv2.imshow("Iris Tracking (ESC to quit)", frame)
+                cv2.imshow("Iris Tracking (ESC to quit)", canvas)
                 key = cv2.waitKey(1)
                 if key == 27:
                     break

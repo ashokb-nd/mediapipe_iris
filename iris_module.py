@@ -1,6 +1,7 @@
 import cv2
 import mediapipe as mp
 import numpy as np
+from collections import deque
 
 BaseOptions = mp.tasks.BaseOptions
 FaceLandmarker = mp.tasks.vision.FaceLandmarker
@@ -22,6 +23,15 @@ RIGHT_EYE_INNER = 263
 
 EYE_CROP_SIZE = (120, 68)
 EYE_CROP_PAD = 12
+
+RIGHT_WIDTH = 380
+GRAPH_W = 340
+GRAPH_H = 130
+PANEL_W = 290
+PANEL_H = 220
+PAD = 12
+HISTORY_MAX = 500
+GRAPH_POINTS = 300
 
 
 def pupil_relative_position(landmarks, iris_indices, eye_indices, outer_corner_idx, inner_corner_idx):
@@ -80,28 +90,24 @@ def extract_eye_crop(image, landmarks, eye_indices, pad=EYE_CROP_PAD, out_size=E
     return cv2.resize(crop, out_size, interpolation=cv2.INTER_LINEAR)
 
 
-def draw_pupil_indicator_panel(image, left_rel, right_rel, left_crop=None, right_crop=None):
-    h, w = image.shape[:2]
-    panel_w = 290
-    panel_h = 220
-    pad = 12
-    panel_x = w - panel_w - pad
-    panel_y = pad
+def draw_panel_at(canvas, x, y, left_rel, right_rel, left_crop=None, right_crop=None):
+    panel_w = PANEL_W
+    panel_h = PANEL_H
 
-    cv2.rectangle(image, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (30, 30, 30), -1)
-    cv2.rectangle(image, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), (180, 180, 180), 1)
-    cv2.putText(image, "Pupil Position", (panel_x + 10, panel_y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
+    cv2.rectangle(canvas, (x, y), (x + panel_w, y + panel_h), (30, 30, 30), -1)
+    cv2.rectangle(canvas, (x, y), (x + panel_w, y + panel_h), (180, 180, 180), 1)
+    cv2.putText(canvas, "Pupil Position", (x + 10, y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
 
     box_size = 52
-    left_box = (panel_x + 54, panel_y + 34)
-    right_box = (panel_x + 184, panel_y + 34)
+    left_box = (x + 54, y + 34)
+    right_box = (x + 184, y + 34)
 
     for label, (bx, by), rel, color in [
         ("L", left_box, left_rel, (0, 255, 0)),
         ("R", right_box, right_rel, (0, 0, 255)),
     ]:
-        cv2.rectangle(image, (bx, by), (bx + box_size, by + box_size), (200, 200, 200), 1)
-        cv2.putText(image, label, (bx + 20, by + box_size + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+        cv2.rectangle(canvas, (bx, by), (bx + box_size, by + box_size), (200, 200, 200), 1)
+        cv2.putText(canvas, label, (bx + 20, by + box_size + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
 
         if rel is not None:
             rx, ry = rel
@@ -109,24 +115,29 @@ def draw_pupil_indicator_panel(image, left_rel, right_rel, left_crop=None, right
             dot_y = int(by + ry * box_size)
             dot_x = max(bx, min(bx + box_size, dot_x))
             dot_y = max(by, min(by + box_size, dot_y))
-            cv2.circle(image, (dot_x, dot_y), 4, color, -1)
+            cv2.circle(canvas, (dot_x, dot_y), 4, color, -1)
 
     crop_w, crop_h = EYE_CROP_SIZE
     left_crop_pos = (left_box[0] - 34, left_box[1] + box_size + 24)
     right_crop_pos = (right_box[0] - 34, right_box[1] + box_size + 24)
 
-    cv2.putText(image, "Eye Crops", (panel_x + 108, panel_y + 104), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
+    cv2.putText(canvas, "Eye Crops", (x + 108, y + 104), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
 
     for label, crop, (cx, cy), color in [
         ("L", left_crop, left_crop_pos, (0, 255, 0)),
         ("R", right_crop, right_crop_pos, (0, 0, 255)),
     ]:
-        cv2.rectangle(image, (cx - 1, cy - 1), (cx + crop_w + 1, cy + crop_h + 1), (190, 190, 190), 1)
-        cv2.putText(image, label, (cx - 12, cy + crop_h // 2 + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+        cv2.rectangle(canvas, (cx - 1, cy - 1), (cx + crop_w + 1, cy + crop_h + 1), (190, 190, 190), 1)
+        cv2.putText(canvas, label, (cx - 12, cy + crop_h // 2 + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
         if crop is not None:
-            image[cy:cy + crop_h, cx:cx + crop_w] = crop
+            canvas[cy:cy + crop_h, cx:cx + crop_w] = crop
         else:
-            cv2.rectangle(image, (cx, cy), (cx + crop_w, cy + crop_h), (50, 50, 50), -1)
+            cv2.rectangle(canvas, (cx, cy), (cx + crop_w, cy + crop_h), (50, 50, 50), -1)
+
+
+def draw_pupil_indicator_panel(image, left_rel, right_rel, left_crop=None, right_crop=None):
+    h, w = image.shape[:2]
+    draw_panel_at(image, w - PANEL_W - PAD, PAD, left_rel, right_rel, left_crop, right_crop)
 
 
 def draw_pupil_position_text(image, landmarks):
@@ -139,7 +150,6 @@ def draw_pupil_position_text(image, landmarks):
     right_rel = (right[0], right[1]) if right else None
     left_crop = extract_eye_crop(image, landmarks, LEFT_EYE)
     right_crop = extract_eye_crop(image, landmarks, RIGHT_EYE)
-    draw_pupil_indicator_panel(image, left_rel, right_rel, left_crop, right_crop)
 
     if left:
         lrx, lry, _, _ = left
@@ -172,6 +182,108 @@ def draw_pupil_position_text(image, landmarks):
             cv2.LINE_AA,
         )
         cv2.circle(image, (int(rix * w), int(riy * h)), 4, (0, 0, 255), -1)
+
+    return left_rel, right_rel, left_crop, right_crop
+
+
+def draw_history_graph(canvas, x, y, w, h, title, history,
+                       color_a, color_b, label_a, label_b):
+    bg = (25, 25, 25)
+    border = (180, 180, 180)
+    text_color = (220, 220, 220)
+    grid_color = (50, 50, 50)
+    now_color = (200, 200, 0)
+
+    cv2.rectangle(canvas, (x, y), (x + w, y + h), bg, -1)
+    cv2.rectangle(canvas, (x, y), (x + w, y + h), border, 1)
+
+    cv2.putText(canvas, title, (x + 8, y + 16), cv2.FONT_HERSHEY_SIMPLEX,
+                0.45, text_color, 1, cv2.LINE_AA)
+
+    lx = x + w - 110
+    cv2.line(canvas, (lx, y + 8), (lx + 12, y + 8), color_a, 2)
+    cv2.putText(canvas, label_a, (lx + 14, y + 12), cv2.FONT_HERSHEY_SIMPLEX,
+                0.35, color_a, 1, cv2.LINE_AA)
+    cv2.line(canvas, (lx + 50, y + 8), (lx + 62, y + 8), color_b, 2)
+    cv2.putText(canvas, label_b, (lx + 64, y + 12), cv2.FONT_HERSHEY_SIMPLEX,
+                0.35, color_b, 1, cv2.LINE_AA)
+
+    ml, mr, mt, mb = 36, 10, 22, 10
+    px = x + ml
+    py = y + mt
+    pw = w - ml - mr
+    ph = h - mt - mb
+
+    cv2.putText(canvas, "1", (x + 2, py + 8), cv2.FONT_HERSHEY_SIMPLEX,
+                0.35, (150, 150, 150), 1, cv2.LINE_AA)
+    cv2.putText(canvas, "0", (x + 2, py + ph - 2), cv2.FONT_HERSHEY_SIMPLEX,
+                0.35, (150, 150, 150), 1, cv2.LINE_AA)
+
+    for i in range(6):
+        gy = int(py + ph * (1 - i / 5))
+        cv2.line(canvas, (px, gy), (px + pw, gy), grid_color, 1)
+
+    if not history or len(history) < 2:
+        return
+
+    n = len(history)
+    if n > GRAPH_POINTS:
+        pts = list(history)[n - GRAPH_POINTS:]
+        offset = 0
+    else:
+        pts = list(history)
+        offset = GRAPH_POINTS - n
+
+    m = len(pts)
+    denom = GRAPH_POINTS - 1 if GRAPH_POINTS > 1 else 1
+
+    pts_a = []
+    pts_b = []
+    for i, (va, vb) in enumerate(pts):
+        xx = int(px + ((offset + i) / denom) * pw)
+        pts_a.append((xx, int(py + ph * (1 - va))))
+        pts_b.append((xx, int(py + ph * (1 - vb))))
+
+    if len(pts_a) >= 2:
+        cv2.polylines(canvas, [np.array(pts_a, dtype=np.int32)], False, color_a, 1, cv2.LINE_AA)
+        cv2.polylines(canvas, [np.array(pts_b, dtype=np.int32)], False, color_b, 1, cv2.LINE_AA)
+
+    cx = pts_a[-1][0]
+    cv2.line(canvas, (cx, py), (cx, py + ph), now_color, 1)
+    cv2.putText(canvas, "now", (cx - 10, py + ph + 8), cv2.FONT_HERSHEY_SIMPLEX,
+                0.3, now_color, 1, cv2.LINE_AA)
+
+
+def compose_frame(video_frame, left_rel, right_rel, left_crop, right_crop,
+                  history_l, history_r):
+    fh, fw = video_frame.shape[:2]
+
+    right_content_h = PAD + PANEL_H + PAD + GRAPH_H + PAD + GRAPH_H + PAD
+    total_w = fw + PAD + RIGHT_WIDTH + PAD
+    total_h = max(fh, right_content_h)
+
+    canvas = np.zeros((total_h, total_w, 3), dtype=np.uint8)
+
+    canvas[:fh, :fw] = video_frame
+
+    cv2.line(canvas, (fw + PAD - 1, 0), (fw + PAD - 1, total_h - 1),
+             (100, 100, 100), 1)
+
+    rx = fw + PAD + (RIGHT_WIDTH - PANEL_W) // 2
+    draw_panel_at(canvas, rx, PAD, left_rel, right_rel, left_crop, right_crop)
+
+    gx = fw + PAD + (RIGHT_WIDTH - GRAPH_W) // 2
+    gy1 = PAD + PANEL_H + PAD
+    draw_history_graph(canvas, gx, gy1, GRAPH_W, GRAPH_H,
+                       "Left Iris Position", history_l,
+                       (0, 255, 0), (100, 255, 100), "X", "Y")
+
+    gy2 = gy1 + GRAPH_H + PAD
+    draw_history_graph(canvas, gx, gy2, GRAPH_W, GRAPH_H,
+                       "Right Iris Position", history_r,
+                       (0, 0, 255), (100, 100, 255), "X", "Y")
+
+    return canvas
 
 
 def draw_landmarks(image, landmarks):

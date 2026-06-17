@@ -4,8 +4,14 @@ import numpy as np
 import os
 from datetime import datetime
 from threading import Lock
+from collections import deque
 
-from iris_module import MODEL_PATH, BaseOptions, FaceLandmarker, FaceLandmarkerOptions, VisionRunningMode, draw_landmarks, draw_pupil_position_text
+from iris_module import (
+    MODEL_PATH, BaseOptions, FaceLandmarker, FaceLandmarkerOptions,
+    VisionRunningMode, draw_landmarks, draw_pupil_position_text,
+    compose_frame, HISTORY_MAX,
+)
+
 
 def main():
     latest_result = None
@@ -13,6 +19,9 @@ def main():
     last_timestamp_ms = -1
     writer = None
     output_path = None
+
+    history_l = deque(maxlen=HISTORY_MAX)
+    history_r = deque(maxlen=HISTORY_MAX)
 
     def on_result(result, output_image, timestamp_ms):
         nonlocal latest_result
@@ -42,8 +51,11 @@ def main():
             frame = cv2.flip(frame, 1)
 
             if writer is None:
+                fh, fw = frame.shape[:2]
+                total_w = fw + 12 + 380 + 12
+                right_h = 12 + 220 + 12 + 130 + 12 + 130 + 12
+                total_h = max(fh, right_h)
                 os.makedirs("DATA/webcam_results", exist_ok=True)
-                h, w = frame.shape[:2]
                 fps = cap.get(cv2.CAP_PROP_FPS)
                 if fps <= 0 or np.isnan(fps):
                     fps = 30.0
@@ -53,7 +65,7 @@ def main():
                     output_path,
                     cv2.VideoWriter_fourcc(*"mp4v"),
                     fps,
-                    (w, h),
+                    (total_w, total_h),
                 )
                 if not writer.isOpened():
                     writer = None
@@ -75,14 +87,26 @@ def main():
             with result_lock:
                 result = latest_result
 
+            left_rel = right_rel = None
+            left_crop = right_crop = None
+
             if result and result.face_landmarks:
                 draw_landmarks(frame, result.face_landmarks[0])
-                draw_pupil_position_text(frame, result.face_landmarks[0])
+                left_rel, right_rel, left_crop, right_crop = \
+                    draw_pupil_position_text(frame, result.face_landmarks[0])
+                if left_rel:
+                    history_l.append(left_rel)
+                if right_rel:
+                    history_r.append(right_rel)
+
+            canvas = compose_frame(frame, left_rel, right_rel,
+                                   left_crop, right_crop,
+                                   history_l, history_r)
 
             if writer is not None:
-                writer.write(frame)
+                writer.write(canvas)
 
-            cv2.imshow("Iris Tracking (ESC to quit)", frame)
+            cv2.imshow("Iris Tracking (ESC to quit)", canvas)
             if cv2.waitKey(1) == 27:
                 break
 
@@ -91,6 +115,7 @@ def main():
         writer.release()
         print(f"Saved recording: {output_path}")
     cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     main()
