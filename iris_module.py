@@ -276,12 +276,12 @@ def compose_frame(video_frame, left_rel, right_rel, left_crop, right_crop,
     gy1 = PAD + PANEL_H + PAD
     draw_history_graph(canvas, gx, gy1, GRAPH_W, GRAPH_H,
                        "Left Iris Position", history_l,
-                       (0, 255, 0), (100, 255, 100), "X", "Y")
+                       (100, 100, 255), (100, 255, 100), "X", "Y")
 
     gy2 = gy1 + GRAPH_H + PAD
     draw_history_graph(canvas, gx, gy2, GRAPH_W, GRAPH_H,
                        "Right Iris Position", history_r,
-                       (0, 0, 255), (100, 100, 255), "X", "Y")
+                       (100, 100, 255), (100, 255, 100), "X", "Y")
 
     return canvas
 
@@ -290,10 +290,12 @@ def draw_landmarks(image, landmarks):
     h, w = image.shape[:2]
     for idx in LEFT_IRIS:
         x, y = int(landmarks[idx].x * w), int(landmarks[idx].y * h)
-        cv2.circle(image, (x, y), 2, (0, 255, 0), -1)
+        r = 2 if idx == LEFT_IRIS_CENTER else 1
+        cv2.circle(image, (x, y), r, (0, 255, 0), -1)
     for idx in RIGHT_IRIS:
         x, y = int(landmarks[idx].x * w), int(landmarks[idx].y * h)
-        cv2.circle(image, (x, y), 2, (0, 0, 255), -1)
+        r = 2 if idx == RIGHT_IRIS_CENTER else 1
+        cv2.circle(image, (x, y), r, (0, 0, 255), -1)
     for pts, color in [(LEFT_EYE, (255, 255, 0)), (RIGHT_EYE, (255, 255, 0))]:
         pts_c = [(int(landmarks[i].x * w), int(landmarks[i].y * h)) for i in pts]
         for i in range(len(pts_c)):
@@ -307,4 +309,4 @@ def draw_landmarks(image, landmarks):
     ]
     for idx, color in anchor_points:
         x, y = int(landmarks[idx].x * w), int(landmarks[idx].y * h)
-        cv2.circle(image, (x, y), 5, color, -1)
+        cv2.circle(image, (x, y), 2, color, -1)
