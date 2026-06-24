@@ -2,12 +2,11 @@ import argparse
 
 import cv2
 import mediapipe as mp
-from collections import deque
 
 from iris_module import (
-    MODEL_PATH, BaseOptions, FaceLandmarker, FaceLandmarkerOptions,
-    VisionRunningMode, draw_landmarks, draw_pupil_position_text,
-    compose_frame, HISTORY_MAX,
+    MODEL_PATH, GRAPH_POINTS, BaseOptions, FaceLandmarker,
+    FaceLandmarkerOptions, VisionRunningMode, draw_landmarks,
+    draw_pupil_position_text, compose_frame,
 )
 
 
@@ -47,10 +46,8 @@ def main():
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     total_w = frame_width + 12 + 380 + 12
-    right_h = 12 + 220 + 12 + 130 + 12 + 130 + 12
+    right_h = 12 + 220 + 12 + 130 + 12 + 130 + 12 + 130 + 12
     total_h = max(frame_height, right_h)
-
-    writer = create_writer(args.output, fps, total_w, total_h) if args.output else None
 
     options = FaceLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=MODEL_PATH),
@@ -59,15 +56,20 @@ def main():
         num_faces=1,
     )
 
+    # ----------------------------------------------------------------
+    # Pass 1: process all frames, store every result
+    # ----------------------------------------------------------------
+    all_left = []
+    all_right = []
+    all_avg = []
+    all_left_crop = []
+    all_right_crop = []
+
     last_timestamp_ms = -1
     frame_index = 0
-    history_l = deque(maxlen=HISTORY_MAX)
-    history_r = deque(maxlen=HISTORY_MAX)
 
     with FaceLandmarker.create_from_options(options) as landmarker:
-        if not args.no_display:
-            print("Press ESC to quit")
-
+        print("Pass 1: processing video...")
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -87,30 +89,75 @@ def main():
 
             left_rel = right_rel = None
             left_crop = right_crop = None
-
             if result and result.face_landmarks:
                 draw_landmarks(frame, result.face_landmarks[0])
                 left_rel, right_rel, left_crop, right_crop = \
                     draw_pupil_position_text(frame, result.face_landmarks[0])
-                if left_rel:
-                    history_l.append(left_rel)
-                if right_rel:
-                    history_r.append(right_rel)
 
-            canvas = compose_frame(frame, left_rel, right_rel,
-                                   left_crop, right_crop,
-                                   history_l, history_r)
-
-            if writer is not None:
-                writer.write(canvas)
-
-            if not args.no_display:
-                cv2.imshow("Iris Tracking (ESC to quit)", canvas)
-                key = cv2.waitKey(1)
-                if key == 27:
-                    break
+            avg_rel = None
+            if left_rel is not None and right_rel is not None:
+                avg_rel = ((left_rel[0] + right_rel[0]) / 2,
+                           (left_rel[1] + right_rel[1]) / 2)
+            all_left.append(left_rel)
+            all_right.append(right_rel)
+            all_avg.append(avg_rel)
+            all_left_crop.append(left_crop)
+            all_right_crop.append(right_crop)
 
             frame_index += 1
+
+        total_frames = frame_index
+        print(f"  Processed {total_frames} frames")
+
+    cap.release()
+
+    # ----------------------------------------------------------------
+    # Pass 2: re-read video and render with full graph context
+    # ----------------------------------------------------------------
+    cap = cv2.VideoCapture(args.video_path)
+
+    writer = create_writer(args.output, fps, total_w, total_h) if args.output else None
+
+    half = GRAPH_POINTS // 2
+    frame_index = 0
+
+    if not args.no_display:
+        print("Pass 2: rendering (ESC to quit)...")
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Build centered windows of exactly GRAPH_POINTS entries
+        window_l = []
+        window_r = []
+        window_avg = []
+        for j in range(frame_index - half, frame_index + half + 1):
+            if 0 <= j < total_frames:
+                window_l.append(all_left[j])
+                window_r.append(all_right[j])
+                window_avg.append(all_avg[j])
+            else:
+                window_l.append(None)
+                window_r.append(None)
+                window_avg.append(None)
+
+        canvas = compose_frame(frame,
+                               all_left[frame_index], all_right[frame_index],
+                               all_left_crop[frame_index], all_right_crop[frame_index],
+                               window_l, window_r, window_avg)
+
+        if writer is not None:
+            writer.write(canvas)
+
+        if not args.no_display:
+            cv2.imshow("Iris Tracking (ESC to quit)", canvas)
+            key = cv2.waitKey(1)
+            if key == 27:
+                break
+
+        frame_index += 1
 
     cap.release()
     if writer is not None:

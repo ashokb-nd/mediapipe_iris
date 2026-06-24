@@ -226,21 +226,19 @@ def draw_history_graph(canvas, x, y, w, h, title, history,
     if not history or len(history) < 2:
         return
 
-    n = len(history)
-    if n > GRAPH_POINTS:
-        pts = list(history)[n - GRAPH_POINTS:]
-        offset = 0
-    else:
-        pts = list(history)
-        offset = GRAPH_POINTS - n
-
-    m = len(pts)
+    center_idx = GRAPH_POINTS // 2
+    pts = list(history)
+    m = min(len(pts), GRAPH_POINTS)
     denom = GRAPH_POINTS - 1 if GRAPH_POINTS > 1 else 1
 
     pts_a = []
     pts_b = []
-    for i, (va, vb) in enumerate(pts):
-        xx = int(px + ((offset + i) / denom) * pw)
+    for i in range(m):
+        val = pts[i]
+        if val is None:
+            continue
+        va, vb = val
+        xx = int(px + (i / denom) * pw)
         pts_a.append((xx, int(py + ph * (1 - va))))
         pts_b.append((xx, int(py + ph * (1 - vb))))
 
@@ -248,17 +246,17 @@ def draw_history_graph(canvas, x, y, w, h, title, history,
         cv2.polylines(canvas, [np.array(pts_a, dtype=np.int32)], False, color_a, 1, cv2.LINE_AA)
         cv2.polylines(canvas, [np.array(pts_b, dtype=np.int32)], False, color_b, 1, cv2.LINE_AA)
 
-    cx = pts_a[-1][0]
+    cx = int(px + (center_idx / denom) * pw)
     cv2.line(canvas, (cx, py), (cx, py + ph), now_color, 1)
     cv2.putText(canvas, "now", (cx - 10, py + ph + 8), cv2.FONT_HERSHEY_SIMPLEX,
                 0.3, now_color, 1, cv2.LINE_AA)
 
 
 def compose_frame(video_frame, left_rel, right_rel, left_crop, right_crop,
-                  history_l, history_r):
+                  history_l, history_r, history_avg=None):
     fh, fw = video_frame.shape[:2]
 
-    right_content_h = PAD + PANEL_H + PAD + GRAPH_H + PAD + GRAPH_H + PAD
+    right_content_h = PAD + PANEL_H + PAD + GRAPH_H + PAD + GRAPH_H + PAD + GRAPH_H + PAD
     total_w = fw + PAD + RIGHT_WIDTH + PAD
     total_h = max(fh, right_content_h)
 
@@ -282,6 +280,11 @@ def compose_frame(video_frame, left_rel, right_rel, left_crop, right_crop,
     draw_history_graph(canvas, gx, gy2, GRAPH_W, GRAPH_H,
                        "Right Iris Position", history_r,
                        (100, 100, 255), (100, 255, 100), "X", "Y")
+
+    gy3 = gy2 + GRAPH_H + PAD
+    draw_history_graph(canvas, gx, gy3, GRAPH_W, GRAPH_H,
+                       "Avg Iris Position", history_avg or [],
+                       (255, 200, 100), (100, 255, 200), "X", "Y")
 
     return canvas
 
