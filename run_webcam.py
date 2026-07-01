@@ -9,8 +9,28 @@ from collections import deque
 from iris_module import (
     MODEL_PATH, BaseOptions, FaceLandmarker, FaceLandmarkerOptions,
     VisionRunningMode, draw_landmarks, draw_pupil_position_text,
-    compose_frame, HISTORY_MAX,
+    compose_frame, HISTORY_MAX, EyeEventDetector,
 )
+
+
+def create_writer(output_path, fps, frame_width, frame_height):
+    codec_candidates = [
+        ("avc1", "H.264"),
+        ("mp4v", "MPEG-4 Part 2"),
+    ]
+    for fourcc_str, codec_label in codec_candidates:
+        writer = cv2.VideoWriter(
+            output_path,
+            cv2.VideoWriter_fourcc(*fourcc_str),
+            fps,
+            (frame_width, frame_height),
+        )
+        if writer.isOpened():
+            print(f"Using output codec: {codec_label} ({fourcc_str})")
+            return writer
+        writer.release()
+
+    return None
 
 
 def main():
@@ -22,6 +42,8 @@ def main():
 
     history_l = deque(maxlen=HISTORY_MAX)
     history_r = deque(maxlen=HISTORY_MAX)
+    history_avg = deque(maxlen=HISTORY_MAX)
+    event_detector = EyeEventDetector()
 
     def on_result(result, output_image, timestamp_ms):
         nonlocal latest_result
@@ -61,13 +83,8 @@ def main():
                     fps = 30.0
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 output_path = os.path.join("DATA/webcam_results", f"webcam_output_{timestamp}.mp4")
-                writer = cv2.VideoWriter(
-                    output_path,
-                    cv2.VideoWriter_fourcc(*"mp4v"),
-                    fps,
-                    (total_w, total_h),
-                )
-                if not writer.isOpened():
+                writer = create_writer(output_path, fps, total_w, total_h)
+                if writer is None:
                     writer = None
                     output_path = None
                     print("Warning: failed to initialize video recording")
@@ -89,19 +106,26 @@ def main():
 
             left_rel = right_rel = None
             left_crop = right_crop = None
+            avg_rel = None
+            current_state = "Unknown"
 
             if result and result.face_landmarks:
                 draw_landmarks(frame, result.face_landmarks[0])
                 left_rel, right_rel, left_crop, right_crop = \
                     draw_pupil_position_text(frame, result.face_landmarks[0])
-                if left_rel:
-                    history_l.append(left_rel)
-                if right_rel:
-                    history_r.append(right_rel)
+                if left_rel is not None and right_rel is not None:
+                    avg_rel = ((left_rel[0] + right_rel[0]) / 2,
+                               (left_rel[1] + right_rel[1]) / 2)
+
+            history_l.append(left_rel)
+            history_r.append(right_rel)
+            history_avg.append(avg_rel)
+            current_state = event_detector.current_state(history_avg, latest_point=avg_rel)
 
             canvas = compose_frame(frame, left_rel, right_rel,
                                    left_crop, right_crop,
-                                   history_l, history_r)
+                                   history_l, history_r, history_avg,
+                                   event_state=current_state)
 
             if writer is not None:
                 writer.write(canvas)

@@ -6,7 +6,7 @@ import mediapipe as mp
 from iris_module import (
     MODEL_PATH, GRAPH_POINTS, BaseOptions, FaceLandmarker,
     FaceLandmarkerOptions, VisionRunningMode, draw_landmarks,
-    draw_pupil_position_text, compose_frame,
+    draw_pupil_position_text, compose_frame, EyeEventDetector,
 )
 
 
@@ -23,15 +23,26 @@ def parse_args():
 
 
 def create_writer(output_path, fps, frame_width, frame_height):
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
-    if not writer.isOpened():
-        raise RuntimeError(f"Failed to open output video for writing: {output_path}")
-    return writer
+    codec_candidates = [
+        ("avc1", "H.264"),
+        ("mp4v", "MPEG-4 Part 2"),
+    ]
+    for fourcc_str, codec_label in codec_candidates:
+        fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
+        writer = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
+        if writer.isOpened():
+            print(f"Using output codec: {codec_label} ({fourcc_str})")
+            return writer
+        writer.release()
+
+    raise RuntimeError(
+        f"Failed to open output video for writing with supported codecs: {output_path}"
+    )
 
 
 def main():
     args = parse_args()
+    event_detector = EyeEventDetector()
 
     cap = cv2.VideoCapture(args.video_path)
     if not cap.isOpened():
@@ -143,10 +154,18 @@ def main():
                 window_r.append(None)
                 window_avg.append(None)
 
+        history_start = max(0, frame_index - GRAPH_POINTS + 1)
+        history_for_state = all_avg[history_start:frame_index + 1]
+        current_state = event_detector.current_state(
+            history_for_state,
+            latest_point=all_avg[frame_index],
+        )
+
         canvas = compose_frame(frame,
                                all_left[frame_index], all_right[frame_index],
                                all_left_crop[frame_index], all_right_crop[frame_index],
-                               window_l, window_r, window_avg)
+                               window_l, window_r, window_avg,
+                               event_state=current_state)
 
         if writer is not None:
             writer.write(canvas)

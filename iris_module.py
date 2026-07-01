@@ -32,6 +32,70 @@ PANEL_H = 220
 PAD = 12
 HISTORY_MAX = 500
 GRAPH_POINTS = 300
+DEFAULT_EVENT_VELOCITY_THRESHOLD = 0.08
+DEFAULT_MIN_FIXATION_FRAMES = 5
+
+
+class EyeEventDetector:
+    """
+    Identifies fixations and saccades from normalized (x, y) pupil trajectories
+    with a velocity-threshold (I-VT) method.
+    """
+
+    def __init__(
+        self,
+        velocity_threshold=DEFAULT_EVENT_VELOCITY_THRESHOLD,
+        min_fixation_frames=DEFAULT_MIN_FIXATION_FRAMES,
+    ):
+        self.velocity_threshold = float(velocity_threshold)
+        self.min_fixation_frames = int(min_fixation_frames)
+
+    def detect_events(self, history_buffer):
+        valid_data = [pt for pt in history_buffer if pt is not None]
+        if len(valid_data) < 2:
+            return []
+
+        coords = np.array(valid_data, dtype=np.float32)
+        diffs = np.diff(coords, axis=0)
+        velocities = np.linalg.norm(diffs, axis=1)
+
+        labels = []
+        for v in velocities:
+            if v < self.velocity_threshold:
+                labels.append("Fixation")
+            else:
+                labels.append("Saccade")
+
+        if labels:
+            labels.append(labels[-1])
+
+        return self._filter_fixations(labels)
+
+    def current_state(self, history_buffer, latest_point=None):
+        if latest_point is None:
+            return "Unknown"
+
+        labels = self.detect_events(history_buffer)
+        return labels[-1] if labels else "Unknown"
+
+    def _filter_fixations(self, labels):
+        refined = list(labels)
+        n = len(refined)
+        i = 0
+
+        while i < n:
+            if refined[i] == "Fixation":
+                start = i
+                while i < n and refined[i] == "Fixation":
+                    i += 1
+                duration = i - start
+                if duration < self.min_fixation_frames:
+                    for k in range(start, i):
+                        refined[k] = "Saccade"
+            else:
+                i += 1
+
+        return refined
 
 
 def pupil_relative_position(landmarks, iris_indices, eye_indices, outer_corner_idx, inner_corner_idx):
@@ -90,7 +154,7 @@ def extract_eye_crop(image, landmarks, eye_indices, pad=EYE_CROP_PAD, out_size=E
     return cv2.resize(crop, out_size, interpolation=cv2.INTER_LINEAR)
 
 
-def draw_panel_at(canvas, x, y, left_rel, right_rel, left_crop=None, right_crop=None):
+def draw_panel_at(canvas, x, y, left_rel, right_rel, left_crop=None, right_crop=None, event_state="Unknown"):
     panel_w = PANEL_W
     panel_h = PANEL_H
 
@@ -134,10 +198,26 @@ def draw_panel_at(canvas, x, y, left_rel, right_rel, left_crop=None, right_crop=
         else:
             cv2.rectangle(canvas, (cx, cy), (cx + crop_w, cy + crop_h), (50, 50, 50), -1)
 
+    state_color = (180, 180, 180)
+    if event_state == "Fixation":
+        state_color = (80, 230, 80)
+    elif event_state == "Saccade":
+        state_color = (80, 170, 255)
+    cv2.putText(
+        canvas,
+        f"Event: {event_state}",
+        (x + 12, y + panel_h - 10),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.52,
+        state_color,
+        1,
+        cv2.LINE_AA,
+    )
 
-def draw_pupil_indicator_panel(image, left_rel, right_rel, left_crop=None, right_crop=None):
+
+def draw_pupil_indicator_panel(image, left_rel, right_rel, left_crop=None, right_crop=None, event_state="Unknown"):
     h, w = image.shape[:2]
-    draw_panel_at(image, w - PANEL_W - PAD, PAD, left_rel, right_rel, left_crop, right_crop)
+    draw_panel_at(image, w - PANEL_W - PAD, PAD, left_rel, right_rel, left_crop, right_crop, event_state)
 
 
 def draw_pupil_position_text(image, landmarks):
@@ -253,7 +333,7 @@ def draw_history_graph(canvas, x, y, w, h, title, history,
 
 
 def compose_frame(video_frame, left_rel, right_rel, left_crop, right_crop,
-                  history_l, history_r, history_avg=None):
+                  history_l, history_r, history_avg=None, event_state="Unknown"):
     fh, fw = video_frame.shape[:2]
 
     right_content_h = PAD + PANEL_H + PAD + GRAPH_H + PAD + GRAPH_H + PAD + GRAPH_H + PAD
@@ -268,7 +348,7 @@ def compose_frame(video_frame, left_rel, right_rel, left_crop, right_crop,
              (100, 100, 100), 1)
 
     rx = fw + PAD + (RIGHT_WIDTH - PANEL_W) // 2
-    draw_panel_at(canvas, rx, PAD, left_rel, right_rel, left_crop, right_crop)
+    draw_panel_at(canvas, rx, PAD, left_rel, right_rel, left_crop, right_crop, event_state)
 
     gx = fw + PAD + (RIGHT_WIDTH - GRAPH_W) // 2
     gy1 = PAD + PANEL_H + PAD
